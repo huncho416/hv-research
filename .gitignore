@@ -1,0 +1,29 @@
+# Visual Studio / WDK build output
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+.vs/
+
+# Driver build artifacts
+*.sys
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.cer
+*.inf.resources
+*_amd64/
+*_x64/
+
+# Logs captured from the research VM
+*.log
+captures/
