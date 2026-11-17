@@ -90,7 +90,6 @@ static void HvrSetupVmcb(PVIRTUAL_PROCESSOR_DATA vp, PCONTEXT ctx)
 {
     PVMCB_CONTROL_AREA control = &vp->GuestVmcb.ControlArea;
     PVMCB_STATE_SAVE_AREA state = &vp->GuestVmcb.StateSaveArea;
-    PSEUDO_DESCRIPTOR gdtr, idtr;
     ULONG_PTR gdtBase;
     PHYSICAL_ADDRESS msrpmPa;
     PSEUDO_DESCRIPTOR gdtrLocal = {0};
@@ -98,9 +97,7 @@ static void HvrSetupVmcb(PVIRTUAL_PROCESSOR_DATA vp, PCONTEXT ctx)
 
     HvrGetGdtBase(&gdtrLocal);
     __sidt(&idtrLocal);
-    gdtr = &gdtrLocal;
-    idtr = &idtrLocal;
-    gdtBase = (ULONG_PTR)gdtr->Base;
+    gdtBase = (ULONG_PTR)gdtrLocal.Base;
 
     /* ---- Control area: intercept CPUID, enable nested paging ---- */
     control->InterceptMisc1 = SVM_INTERCEPT_MISC1_CPUID;
@@ -113,8 +110,8 @@ static void HvrSetupVmcb(PVIRTUAL_PROCESSOR_DATA vp, PCONTEXT ctx)
     control->IopmBasePa = 0; /* no I/O intercepts */
 
     /* ---- State-save area: clone the current (host) state ---- */
-    state->Gdtr.Base = gdtr->Base;  state->GdtrLimit = gdtr->Limit;
-    state->Idtr.Base = idtr->Base;  state->IdtrLimit = idtr->Limit;
+    state->GdtrBase = gdtrLocal.Base;  state->GdtrLimit = gdtrLocal.Limit;
+    state->IdtrBase = idtrLocal.Base;  state->IdtrLimit = idtrLocal.Limit;
 
     state->CsSelector = HvrGetCs();  state->CsAttrib = HvrSegAttr(state->CsSelector, gdtBase);
     state->SsSelector = HvrGetSs();  state->SsAttrib = HvrSegAttr(state->SsSelector, gdtBase);
