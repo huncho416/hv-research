@@ -24,13 +24,14 @@
 #define CPUID_FN_HV_VENDOR       0x40000000
 #define CPUID_EXT_ECX_SVM        (1UL << 2)   /* 8000_0001.ECX[2]  */
 #define CPUID_SVM_EDX_NP         (1UL << 0)   /* 8000_000A.EDX[0]  */
+#define CPUID_SVM_EDX_NRIPS      (1UL << 3)   /* 8000_000A.EDX[3]  */
 #define CPUID_FEAT_ECX_HV        (1UL << 31)  /* 0000_0001.ECX[31] */
 
 /* A private CPUID leaf our hypervisor answers, used to detect ourselves and
  * to request an orderly unload from inside the guest. */
-#define HVR_CPUID_SIGNATURE      0x40000100   /* returns 'Hvsr' in EAX etc.  */
+#define HVR_CPUID_SIGNATURE      0x40000100   /* returns 'Hvsr' in EBX       */
 #define HVR_CPUID_UNLOAD         0x40000101
-#define HVR_BACK_TO_HOST_SIGNATURE 0x48767372 /* 'Hvsr' */
+#define HVR_SIGNATURE_EBX        0x72767348   /* 'Hvsr' little-endian        */
 
 /* ---- VMCB control area intercept bits (subset we use) ------------------ */
 #define SVM_INTERCEPT_MISC1_CPUID   (1UL << 18)
@@ -195,27 +196,29 @@ static_assert(sizeof(VMCB) == PAGE_SIZE, "VMCB must be one page");
 
 /*
  * GUEST_REGISTERS - general-purpose registers pushed by the assembly VMEXIT
- * stub, in the order it pushes them. RAX lives in the VMCB state-save area and
- * is handled separately.
+ * stub, in the order it pushes them (see svm.asm, PUSHAQ macro). The lowest
+ * offset (R15) is at the lowest address, i.e. pushed LAST. RAX here is the
+ * HOST rax at the moment of #VMEXIT (it holds GuestVmcbPa), NOT the guest rax;
+ * the guest's rax lives in VMCB.StateSaveArea.Rax and is handled separately.
  */
 typedef struct _GUEST_REGISTERS
 {
-    UINT64 R15;
-    UINT64 R14;
-    UINT64 R13;
-    UINT64 R12;
-    UINT64 R11;
-    UINT64 R10;
-    UINT64 R9;
-    UINT64 R8;
-    UINT64 Rdi;
-    UINT64 Rsi;
-    UINT64 Rbp;
-    UINT64 Rsp;   /* placeholder slot; true RSP is in VMCB */
-    UINT64 Rbx;
-    UINT64 Rdx;
-    UINT64 Rcx;
-    UINT64 Rax;
+    UINT64 R15;   // +0x00
+    UINT64 R14;   // +0x08
+    UINT64 R13;   // +0x10
+    UINT64 R12;   // +0x18
+    UINT64 R11;   // +0x20
+    UINT64 R10;   // +0x28
+    UINT64 R9;    // +0x30
+    UINT64 R8;    // +0x38
+    UINT64 Rdi;   // +0x40
+    UINT64 Rsi;   // +0x48
+    UINT64 Rbp;   // +0x50
+    UINT64 Rsp;   // +0x58 placeholder; true guest RSP is in VMCB
+    UINT64 Rbx;   // +0x60
+    UINT64 Rdx;   // +0x68
+    UINT64 Rcx;   // +0x70
+    UINT64 Rax;   // +0x78 (host rax at exit = GuestVmcbPa)
 } GUEST_REGISTERS, *PGUEST_REGISTERS;
 
 /* Shared, read-mostly data referenced by every virtual processor. */
@@ -227,29 +230,31 @@ typedef struct _SHARED_VP_DATA
 } SHARED_VP_DATA, *PSHARED_VP_DATA;
 
 /*
- * Per-CPU data. The layout of the first members matters: the host state-save
- * area, the two VMCBs, and the host stack are consumed directly by VMRUN and
- * by the assembly launch/exit code. HostStackLimit sits at the bottom of the
- * per-CPU stack; the top of that stack stores the self-pointer the exit stub
- * uses to find this structure.
+ * Per-CPU data. The assembly launch routine (HvrLaunchVm) is given a pointer
+ * to HostStack.Layout.GuestVmcbPa and sets RSP there. The six trailing fields
+ * MUST stay in this exact order because the assembly reads them as:
+ *     [rsp+0x00] GuestVmcbPa
+ *     [rsp+0x08] HostVmcbPa
+ *     [rsp+0x10] Self
+ *     [rsp+0x18] SharedVpData
+ *     [rsp+0x20] Padding1
+ *     [rsp+0x28] Reserved1
  */
 typedef struct DECLSPEC_ALIGN(PAGE_SIZE) _VIRTUAL_PROCESSOR_DATA
 {
     union
     {
-        /* The top of the host stack holds the per-CPU bookkeeping the exit
-         * handler reads after a #VMEXIT. */
         struct
         {
-            UINT8 Stack[KERNEL_STACK_SIZE - sizeof(PVOID) * 6];
-            UINT64 Reserved;
-            PSHARED_VP_DATA SharedVpData;    /* +stack top - 0x28 */
+            UINT8 StackContents[KERNEL_STACK_SIZE - sizeof(PVOID) * 6];
+            UINT64 GuestVmcbPa;
+            UINT64 HostVmcbPa;
             struct _VIRTUAL_PROCESSOR_DATA* Self;
-            PVMCB GuestVmcbVa;
-            PVMCB HostVmcbVa;
-            UINT64 Padding;
-        } HostStackLayout;
-        UINT8 HostStackLimit[KERNEL_STACK_SIZE];
+            PSHARED_VP_DATA SharedVpData;
+            UINT64 Padding1;
+            UINT64 Reserved1;
+        } Layout;
+        UINT8 Limit[KERNEL_STACK_SIZE];
     } HostStack;
 
     VMCB GuestVmcb;                     /* page aligned */
@@ -277,6 +282,7 @@ typedef struct _HVR_CONTEXT
     SHARED_VP_DATA Shared;
     PVIRTUAL_PROCESSOR_DATA* VpArray;   /* one pointer per logical processor   */
     ULONG VpCount;
+    BOOLEAN NripsSupported;
     volatile LONG Virtualized;          /* non-zero if any CPU is virtualized  */
 } HVR_CONTEXT, *PHVR_CONTEXT;
 
@@ -291,12 +297,14 @@ void HvrProbe(PHVR_PROBE_RESULT Result);
 BOOLEAN HvrIsSvmUsable(void);
 
 /* ---- exit.c ----------------------------------------------------------- */
-/* Returns TRUE if the hypervisor should tear down and return to the host. */
+/* Returns TRUE if the hypervisor should tear down and return to the host on
+ * this CPU (used by the orderly unload path). */
 BOOLEAN HvrHandleVmExit(PVIRTUAL_PROCESSOR_DATA Vp, PGUEST_REGISTERS Regs);
 
 /* ---- assembly (svm.asm) ----------------------------------------------- */
 void HvrLaunchVm(void* HostRsp);
-void _sgdt(void* Descriptor);
+BOOLEAN HvrIsHypervisorInstalled(void);  /* CPUID HVR_CPUID_SIGNATURE probe   */
+void HvrGetGdtBase(void* Descriptor);    /* sgdt wrapper                      */
 UINT16 HvrGetCs(void);
 UINT16 HvrGetSs(void);
 UINT16 HvrGetDs(void);
