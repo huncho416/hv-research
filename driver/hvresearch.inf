@@ -1,0 +1,49 @@
+; hvresearch.inf - installation information for the hv-research SVM driver.
+; Research/educational software-only device. Install on a DEDICATED research VM
+; whose code-signing policy you have provisioned yourself (see README).
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   =
+CatalogFile = hvresearch.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12 ; %windir%\System32\drivers
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+hvresearch.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%DeviceDesc% = hvresearch_Install, Root\hvresearch
+
+[hvresearch_Install.NT]
+CopyFiles = hvresearch_CopyFiles
+
+[hvresearch_CopyFiles]
+hvresearch.sys
+
+[hvresearch_Install.NT.Services]
+AddService = hvresearch, 0x00000002, hvresearch_Service
+
+[hvresearch_Service]
+DisplayName   = %ServiceDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %12%\hvresearch.sys
+
+[Strings]
+ProviderName = "hv-research"
+DiskName     = "hv-research Install Disk"
+DeviceDesc   = "hv-research SVM research device"
+ServiceDesc  = "hv-research SVM research driver"
