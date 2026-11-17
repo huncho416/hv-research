@@ -14,13 +14,13 @@
  */
 #include "svm.h"
 #include "log.h"
+#include <ntstrsafe.h>
 
 #define EXP_MAX_LEN 64
 
 static NTSTATUS HvrReadPhysicalView(UINT64 va, PUINT8 buf, UINT32 len, UINT64* outPa)
 {
     PHYSICAL_ADDRESS pa;
-    PVOID mapped;
     MM_COPY_ADDRESS src;
     SIZE_T done = 0;
     NTSTATUS status;
@@ -35,7 +35,6 @@ static NTSTATUS HvrReadPhysicalView(UINT64 va, PUINT8 buf, UINT32 len, UINT64* o
      * NPT also sees). MmCopyMemory with PHYSICAL is the safe kernel analogue. */
     src.PhysicalAddress = pa;
     status = MmCopyMemory(buf, src, len, MM_COPY_MEMORY_PHYSICAL, &done);
-    UNREFERENCED_PARAMETER(mapped);
     return status;
 }
 
